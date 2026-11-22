@@ -1,0 +1,158 @@
+name: x64dbg native build, upstream tests, and FaultScope plugin integration
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-source:
+    name: Resolve x64dbg source revision
+    runs-on: ubuntu-latest
+    outputs:
+      x64dbg_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Checkout x64dbg source
+        uses: actions/checkout@v6
+        with:
+          repository: x64dbg/x64dbg
+          ref: development
+          path: x64dbg
+          fetch-depth: 1
+      - name: Record source revision
+        id: source
+        shell: bash
+        run: echo "sha=$(git -C x64dbg rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: resolve-source
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86]
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v6
+
+      - name: Unpack lab source payload
+        shell: pwsh
+        run: |
+          py -c "import zipfile; zipfile.ZipFile('FaultScope-Test-Lab.zip').extractall('.lab-payload')"
+          "LAB_ROOT=$env:GITHUB_WORKSPACE/.lab-payload/FaultScope-Test-Lab" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Checkout x64dbg source and submodules
+        uses: actions/checkout@v6
+        with:
+          repository: x64dbg/x64dbg
+          ref: ${{ needs.resolve-source.outputs.x64dbg_sha }}
+          path: x64dbg
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Inject FaultScope plugin regression test into x64dbg test tree
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'x64dbg/src/tests/faultscope_bridge'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/plugin.cpp" (Join-Path $destination 'plugin.cpp')
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/target.cpp" (Join-Path $destination 'target.cpp')
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/test.txt" (Join-Path $destination 'test.txt')
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/check.py" (Join-Path $destination 'check.py')
+          $cmakePath = Join-Path $env:GITHUB_WORKSPACE 'x64dbg/src/tests/CMakeLists.txt'
+          $cmake = Get-Content -Raw $cmakePath
+          $marker = '    scriptcmd_call_threads'
+          if (-not $cmake.Contains($marker)) { throw 'Could not find the upstream test registration marker; refusing a silent unregistered test.' }
+          if (-not $cmake.Contains('    faultscope_bridge')) {
+            $cmake = $cmake.Replace($marker, $marker + "`r`n    faultscope_bridge")
+            Set-Content -Path $cmakePath -Value $cmake -NoNewline
+          }
+
+      - name: Set up Visual Studio compiler environment
+        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Configure x64dbg
+        working-directory: x64dbg
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_UNITY_BUILD=ON -DCMAKE_UNITY_BUILD_BATCH_SIZE=6 -DX64DBG_RELEASE=OFF
+
+      - name: Build x64dbg and FaultScope plugin test target
+        working-directory: x64dbg
+        run: cmake --build build
+
+      - name: Upload architecture build outputs
+        uses: actions/upload-artifact@v7
+        with:
+          name: x64dbg-build-${{ matrix.arch }}
+          path: x64dbg/bin
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 3
+
+  test:
+    name: ${{ matrix.arch }} / ${{ matrix.engine }} tests
+    needs: [build, resolve-source]
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86]
+        engine: [TitanEngine, GleeBug]
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v6
+
+      - name: Unpack lab source payload
+        shell: pwsh
+        run: |
+          py -c "import zipfile; zipfile.ZipFile('FaultScope-Test-Lab.zip').extractall('.lab-payload')"
+          "LAB_ROOT=$env:GITHUB_WORKSPACE/.lab-payload/FaultScope-Test-Lab" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Checkout exact x64dbg source revision used for the build
+        uses: actions/checkout@v6
+        with:
+          repository: x64dbg/x64dbg
+          ref: ${{ needs.resolve-source.outputs.x64dbg_sha }}
+          path: x64dbg
+          fetch-depth: 1
+
+      - name: Restore FaultScope test source files for native test runner
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'x64dbg/src/tests/faultscope_bridge'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/plugin.cpp" (Join-Path $destination 'plugin.cpp')
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/target.cpp" (Join-Path $destination 'target.cpp')
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/test.txt" (Join-Path $destination 'test.txt')
+          Copy-Item "$env:LAB_ROOT/tests/x64dbg/faultscope_bridge/check.py" (Join-Path $destination 'check.py')
+
+      - name: Download matching architecture build
+        uses: actions/download-artifact@v8
+        with:
+          name: x64dbg-build-${{ matrix.arch }}
+          path: x64dbg/bin
+
+      - name: Run complete upstream suite plus FaultScope bridge test
+        working-directory: x64dbg
+        shell: pwsh
+        run: |
+          py src/tests/run.py --arch ${{ matrix.arch }} --engine ${{ matrix.engine }} --artifacts-dir "test-artifacts/${{ matrix.arch }}-${{ matrix.engine }}"
+
+      - name: Upload x64dbg test logs and FaultScope evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: x64dbg-test-evidence-${{ matrix.arch }}-${{ matrix.engine }}
+          path: |
+            x64dbg/test-artifacts/${{ matrix.arch }}-${{ matrix.engine }}
+            x64dbg/bin/x64/faultscope-session.json
+            x64dbg/bin/x32/faultscope-session.json
+          if-no-files-found: warn
+          retention-days: 14

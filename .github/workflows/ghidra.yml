@@ -1,0 +1,102 @@
+name: Ghidra source build and FaultScope exporter integration
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v6
+
+      - name: Unpack lab source payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile("FaultScope-Test-Lab.zip") as archive:
+              archive.extractall(".lab-payload")
+          PY
+          echo "LAB_ROOT=$GITHUB_WORKSPACE/.lab-payload/FaultScope-Test-Lab" >> "$GITHUB_ENV"
+
+      - name: Checkout Ghidra source
+        uses: actions/checkout@v6
+        with:
+          repository: NationalSecurityAgency/ghidra
+          ref: master
+          path: ghidra
+          fetch-depth: 1
+
+      - name: Read Ghidra JDK requirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          jdk_ver="$(awk -F'=' '$1=="application.java.min" {print $2}' ghidra/Ghidra/application.properties | tr -d '\r')"
+          test -n "$jdk_ver"
+          echo "JDK_VER=$jdk_ver" >> "$GITHUB_ENV"
+          echo "Ghidra source requires JDK $jdk_ver"
+          git -C ghidra rev-parse HEAD
+
+      - name: Set up required JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JDK_VER }}
+
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make zip unzip python3
+
+      - name: Fetch Ghidra build dependencies
+        working-directory: ghidra
+        run: ./gradlew -I gradle/support/fetchDependencies.gradle -DhideDownloadProgress -DnoEclipse
+
+      - name: Build Ghidra from source
+        working-directory: ghidra
+        run: ./gradlew buildGhidra --parallel
+
+      - name: Compile harmless analysis fixture
+        run: |
+          gcc -Wall -Wextra -O0 -g -fno-inline "$LAB_ROOT/fixtures/ghidra_sample.c" -o "$RUNNER_TEMP/faultscope-ghidra-sample"
+          test -s "$RUNNER_TEMP/faultscope-ghidra-sample"
+
+      - name: Run real Ghidra headless analysis and FaultScope exporter
+        shell: bash
+        env:
+          JAVA_TOOL_OPTIONS: -DUSER_AGREEMENT=ACCEPT
+        run: |
+          set -euo pipefail
+          ghidra_zip="$(find ghidra/build/dist -maxdepth 1 -type f -name 'ghidra_*.zip' | sort | tail -n 1)"
+          test -n "$ghidra_zip"
+          mkdir -p "$RUNNER_TEMP/ghidra-unpacked" "$RUNNER_TEMP/ghidra-projects"
+          unzip -q "$ghidra_zip" -d "$RUNNER_TEMP/ghidra-unpacked"
+          analyze_headless="$(find "$RUNNER_TEMP/ghidra-unpacked" -type f -path '*/support/analyzeHeadless' -print -quit)"
+          test -n "$analyze_headless"
+          chmod +x "$analyze_headless"
+          "$analyze_headless" \
+            "$RUNNER_TEMP/ghidra-projects" FaultScopeCI \
+            -import "$RUNNER_TEMP/faultscope-ghidra-sample" \
+            -scriptPath "$LAB_ROOT/scripts" \
+            -postScript ExportFaultScopeReport.java "$RUNNER_TEMP/faultscope-ghidra-report.json" \
+            -deleteProject
+          python3 "$LAB_ROOT/tests/ghidra/verify_export.py" --input "$RUNNER_TEMP/faultscope-ghidra-report.json"
+
+      - name: Upload Ghidra build and integration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ghidra-build-and-faultscope-report
+          path: |
+            ghidra/build/dist/ghidra_*.zip
+            ${{ runner.temp }}/faultscope-ghidra-report.json
+          if-no-files-found: warn
+          retention-days: 14
