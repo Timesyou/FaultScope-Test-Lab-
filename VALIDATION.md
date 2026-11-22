@@ -1,25 +1,36 @@
 # FaultScope native CI validation record
 
-Date: 2026-11-22
-Repository commit tested: `fd263d4ed1e31da543bfa56a5b0300f0e280e664`
+Date: 2026-11-22  
+Verification branch: `connector-access-verification-20261122`  
+Repository commit tested: `18e4190eaecb58cbda8a1f3bcb026f148e1f1bfc`
 
-## x64dbg: independently verified PASS
+The runs below are successful GitHub Actions executions on the verification branch. The branch was four commits ahead of `main` at the time of inspection; these results must not be represented as tests of the current `main` commit.
 
-| Architecture | Engine | Upstream regression tests | FaultScope bridge | Events | Dropped |
-|---|---|---:|---:|---:|---:|
-| x86 | GleeBug | 82/82 | PASS (3 assertions) | 16 | 0 |
-| x86 | TitanEngine | 82/82 | PASS (3 assertions) | 16 | 0 |
-| x64 | GleeBug | 82/82 | PASS (3 assertions) | 16 | 0 |
-| x64 | TitanEngine | 82/82 | PASS (3 assertions) | 15 | 0 |
+## x64dbg: PASS
 
-Totals: **328 upstream regression test passes** and **4/4 FaultScope bridge integration passes** (332 test-case passes including the four bridge tests).
+Actions run: [#45013374671](https://github.com/Timesyou/FaultScope-Test-Lab-/actions/runs/45013374671)
 
-Each downloaded GitHub Actions artifact ZIP passed ZIP integrity checking. The 82 upstream debug logs in each combination each contained exactly one passing final test line. Each plugin log and session report was independently checked for plugin load, both registered commands, process-created callback, matching non-zero process ID, module/thread events, breakpoint event, process exit, final debug-stop, JSON schema, zero dropped events, repository validator success, and clean plugin unload. Each bridge run satisfied three integration assertions.
+| Architecture | Engine | Upstream regression tests | FaultScope bridge | Combined runner summary |
+|---|---|---:|---:|---:|
+| x86 | GleeBug | 82/82 | PASS (3 assertions) | 83/83 |
+| x86 | TitanEngine | 82/82 | PASS (3 assertions) | 83/83 |
+| x64 | GleeBug | 82/82 | PASS (3 assertions) | 83/83 |
+| x64 | TitanEngine | 82/82 | PASS (3 assertions) | 83/83 |
 
-These results validate the supplied benign debuggee fixture and this tested integration path. They do not prove that every possible executable, debugger event sequence, or target environment will behave identically.
+Aggregate: **328 upstream regression-test passes** and **4/4 FaultScope bridge integration passes**. Each bridge integration test reported three passing assertions. Both architecture builds and all four test jobs completed successfully.
 
-## Ghidra: compatibility fix included; rerun required
+## Ghidra: PASS
 
-The first CI run successfully checked out Ghidra, configured its required JDK, fetched dependencies, built Ghidra from source, and compiled the benign fixture. The real headless exporter step then failed at script compilation because `ReferenceManager.getReferencesFrom(Address)` returns `Reference[]`, not `ReferenceIterator`.
+Actions run: [#45013374574](https://github.com/Timesyou/FaultScope-Test-Lab-/actions/runs/45013374574)
 
-The nested exporter in this repair now iterates the returned `Reference[]`. The workflow is pinned to Ghidra commit `3fb3eec6a05442c901e9ead8620ca21eae830b18`, and the large Ghidra distribution archive is no longer uploaded as an artifact. Ghidra is **not considered passed** until the new Actions run completes headless analysis, creates the report, and passes `tests/ghidra/verify_export.py`.
+- Pinned Ghidra source revision: `3fb3eec6a05442c901e9ead8620ca21eae830b18`.
+- Source build: passed.
+- Harmless C fixture compilation: passed.
+- Real `analyzeHeadless` import and exporter execution: passed.
+- `tests/ghidra/verify_export.py` report validation: passed.
+- Report: 6,336 bytes; SHA-256 `988c1793771c360e717055686c24f9ce7b1f5d842d6ba727dd84584e826bc911`.
+- Exported metadata: 19 functions, 7 imports, 84 strings, 59 references.
+
+## Scope and limitations
+
+These tests validate the supplied harmless fixture and the tested integration path. They do not establish that arbitrary binaries are safe, that all debugger event sequences are handled, or that every target environment behaves identically. The verification branch has not been merged into `main`; check the branch and commit above when reproducing these results.
