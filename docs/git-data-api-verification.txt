@@ -1,0 +1,1 @@
+Git database API write path verified: blob -> tree -> commit -> ref update.
