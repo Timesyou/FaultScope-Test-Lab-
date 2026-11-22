@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: NationalSecurityAgency/ghidra
-          ref: master
+          ref: 3fb3eec6a05442c901e9ead8620ca21eae830b18
           path: ghidra
           fetch-depth: 1
 
@@ -96,7 +96,6 @@ jobs:
         with:
           name: ghidra-build-and-faultscope-report
           path: |
-            ghidra/build/dist/ghidra_*.zip
             ${{ runner.temp }}/faultscope-ghidra-report.json
           if-no-files-found: warn
           retention-days: 14

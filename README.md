@@ -20,6 +20,17 @@ The workflows run on push, pull request and manual dispatch. GitHub Actions must
 
 Only the supplied harmless fixtures should be used in automated CI. Do not add private customer executables, incident dumps, internal paths, or sensitive investigation data to this public repository or its Actions artifacts. These tests validate the integration and exported observations; they do not determine whether arbitrary binaries are benign or malicious.
 
-## Current state
+## Verified CI results (2026-11-22)
 
-The harness package and workflow definitions have been assembled and statically checked. Native builds, plugin loading, and actual report export are **pending the first GitHub Actions run**. Read the individual job logs and download the artifacts; do not treat a missing artifact or skipped test as a pass.
+The first native x64dbg CI run passed on both architectures and both debugger engines:
+
+- x86 + GleeBug: 82/82 upstream tests and the FaultScope bridge test passed.
+- x86 + TitanEngine: 82/82 upstream tests and the FaultScope bridge test passed.
+- x64 + GleeBug: 82/82 upstream tests and the FaultScope bridge test passed.
+- x64 + TitanEngine: 82/82 upstream tests and the FaultScope bridge test passed.
+
+The four downloaded logs and reports were independently inspected: 328 upstream regression test passes, 4/4 FaultScope bridge integration passes, valid JSON session reports, non-zero process IDs matching real process-created callbacks, module/thread/breakpoint/process-exit events, zero dropped events, validator success, and clean plugin unload. The independent verification uses line-based parsing so Windows CRLF logs are not undercounted.
+
+The Ghidra source build and harmless fixture compilation passed on the first run. Its headless exporter step exposed an API compatibility error: `ReferenceManager.getReferencesFrom(Address)` returns `Reference[]`, not `ReferenceIterator`. The nested exporter has been corrected. The next native run must still pass headless execution and JSON validation before Ghidra can be marked successful.
+
+Ghidra's source checkout is pinned to a specific commit for repeatable builds. The workflow uploads the JSON report rather than the 562 MB Ghidra distribution archive.
